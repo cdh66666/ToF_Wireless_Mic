@@ -1,6 +1,7 @@
 #include "audio_espnow.h"
-#include "esp_log.h"
 
+#include "ToF.h"
+#include "esp_log.h"
 // 接收端MAC地址（替换为你的实际MAC）
 static const uint8_t peer_mac[6] = {0x98, 0xa3, 0x16, 0xf0, 0xb4, 0x34};
 
@@ -29,4 +30,22 @@ void app_main(void)
         return;
     }
     ESP_LOGI(TAG, "音频发送任务启动成功");
+
+
+    // 5. 初始化传感器
+    esp_err_t ret = tof050c_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "ToF初始化失败");
+        return;
+    }
+
+    // 2. 循环测距（100ms/次，适配你的需求）
+    while (1) {
+        uint16_t distance = tof050c_read_distance_mm();
+        ESP_LOGI(TAG, "当前有效测距结果：%d mm", distance);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
 }
+
+
+ 

@@ -1,110 +1,100 @@
-#ifndef TOF_H
-#define TOF_H
+#ifndef __TOF050C_H__
+#define __TOF050C_H__
 
-// 1. 引入基础标准头文件（解决uint8_t/bool/NULL未定义）
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
+#include "esp_err.h"
+#include "driver/i2c_master.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "hal/i2c_types.h"
 
-// 2. 引入ESP-IDF核心头文件
-#include "esp_err.h"          // ESP_OK/esp_err_t
-#include "esp_log.h"          // ESP_LOGI/ESP_LOGE
-#include "esp_attr.h"         // IRAM_ATTR
-#include "driver/i2c_master.h"// I2C master驱动（ESP-IDF v5.x）
-#include "driver/gpio.h"      // GPIO相关
-#include "freertos/FreeRTOS.h"// FreeRTOS核心
-#include "freertos/task.h"    // vTaskDelay/portTICK_PERIOD_MS
+// ===================== 硬件配置（仅改这里适配你的硬件） =====================
+#define I2C_MASTER_NUM        I2C_NUM_0    // I2C端口
+#define TOF_SDA_GPIO          GPIO_NUM_6   // SDA引脚
+#define TOF_SCL_GPIO          GPIO_NUM_7   // SCL引脚
 
-// 日志TAG定义
-#define TAG "VL6180X"
+// ===================== 官方库宏定义 =====================
+#define VL6180X_DEFAULT_I2C_ADDR 0x29 ///< 官方默认I2C地址
 
-// I2C端口定义（根据你的硬件修改，默认I2C_NUM_0）
-#define I2C_MASTER_NUM I2C_NUM_0
+///! 设备模型识别号
+#define VL6180X_REG_IDENTIFICATION_MODEL_ID 0x000
+///! 中断配置
+#define VL6180X_REG_SYSTEM_INTERRUPT_CONFIG 0x014
+///! 中断清除位
+#define VL6180X_REG_SYSTEM_INTERRUPT_CLEAR 0x015
+///! 复位状态位
+#define VL6180X_REG_SYSTEM_FRESH_OUT_OF_RESET 0x016
+///! 启动测距
+#define VL6180X_REG_SYSRANGE_START 0x018
+///! 批次间偏移量
+#define VL6180X_REG_SYSRANGE_PART_TO_PART_RANGE_OFFSET 0x024
+///! 启动ALS测光
+#define VL6180X_REG_SYSALS_START 0x038
+///! ALS增益
+#define VL6180X_REG_SYSALS_ANALOGUE_GAIN 0x03F
+///! ALS积分周期高字节
+#define VL6180X_REG_SYSALS_INTEGRATION_PERIOD_HI 0x040
+///! ALS积分周期低字节
+#define VL6180X_REG_SYSALS_INTEGRATION_PERIOD_LO 0x041
+///! 测距状态/错误码
+#define VL6180X_REG_RESULT_RANGE_STATUS 0x04d
+///! 中断状态
+#define VL6180X_REG_RESULT_INTERRUPT_STATUS_GPIO 0x04f
+///! ALS测量值
+#define VL6180X_REG_RESULT_ALS_VAL 0x050
+///! 测距结果值
+#define VL6180X_REG_RESULT_RANGE_VAL 0x062
+///! I2C从机地址
+#define VL6180X_REG_SLAVE_DEVICE_ADDRESS 0x212
 
-// ToF050c I2C地址（7位地址）
-#define VL6180X_I2C_ADDR      0x29        // 7位I2C地址
+///! ALS增益选项
+#define VL6180X_ALS_GAIN_1 0x06    ///< 1x增益
+#define VL6180X_ALS_GAIN_1_25 0x05 ///< 1.25x增益
+#define VL6180X_ALS_GAIN_1_67 0x04 ///< 1.67x增益
+#define VL6180X_ALS_GAIN_2_5 0x03  ///< 2.5x增益
+#define VL6180X_ALS_GAIN_5 0x02    ///< 5x增益
+#define VL6180X_ALS_GAIN_10 0x01   ///< 10x增益
+#define VL6180X_ALS_GAIN_20 0x00   ///< 20x增益
+#define VL6180X_ALS_GAIN_40 0x07   ///< 40x增益
 
-// ToF050c寄存器地址
-#define IDENTIFICATION__MODEL_ID                0x000
-#define IDENTIFICATION__MODEL_REV_MAJOR       0x001
-#define IDENTIFICATION__MODEL_REV_MINOR       0x002
-#define IDENTIFICATION__MODULE_REV_MAJOR      0x003
-#define IDENTIFICATION__MODULE_REV_MINOR      0x004
-#define IDENTIFICATION__DATE_HI               0x006
-#define IDENTIFICATION__DATE_LO               0x007
-#define IDENTIFICATION__TIME                  0x008
-#define SYSTEM__MODE_GPIO0                    0x010
-#define SYSTEM__MODE_GPIO1                    0x011
-#define SYSTEM__HISTORY_CTRL                  0x012
-#define SYSTEM__INTERRUPT_CONFIG_GPIO         0x014
-#define SYSTEM__INTERRUPT_CLEAR               0x015
-#define SYSTEM__FRESH_OUT_OF_RESET            0x016
-#define SYSTEM__GROUPED_PARAMETER_HOLD        0x017
-#define SYSRANGE__START                       0x018
-#define SYSRANGE__THRESH_HIGH                 0x019
-#define SYSRANGE__THRESH_LOW                  0x01A
-#define SYSRANGE__INTERMEASUREMENT_PERIOD     0x01B
-#define SYSRANGE__MAX_CONVERGENCE_TIME        0x01C
-#define SYSRANGE__CROSSTALK_COMPENSATION_RATE 0x01E
-#define SYSRANGE__CROSSTALK_VALID_HEIGHT      0x021
-#define SYSRANGE__EARLY_CONVERGENCE_ESTIMATE  0x022
-#define SYSRANGE__PART_TO_PART_RANGE_OFFSET   0x024
-#define SYSRANGE__RANGE_IGNORE_VALID_HEIGHT   0x025
-#define SYSRANGE__RANGE_IGNORE_THRESHOLD      0x026
-#define SYSRANGE__MAX_AMBIENT_LEVEL_MULT      0x02C
-#define SYSRANGE__RANGE_CHECK_ENABLES         0x02D
-#define SYSRANGE__VHV_RECALIBRATE             0x02E
-#define SYSRANGE__VHV_REPEAT_RATE             0x031
-#define SYSALS__START                         0x038
-#define SYSALS__THRESH_HIGH                   0x03A
-#define SYSALS__THRESH_LOW                    0x03C
-#define SYSALS__INTERMEASUREMENT_PERIOD       0x03E
-#define SYSALS__ANALOGUE_GAIN                 0x03F
-#define SYSALS__INTEGRATION_PERIOD            0x040
-#define RESULT__RANGE_STATUS                  0x04D
-#define RESULT__ALS_STATUS                    0x04E
-#define RESULT__INTERRUPT_STATUS_GPIO         0x04F
-#define RESULT__ALS_VAL                       0x050
-#define RESULT__HISTORY_BUFFER_0              0x052
-#define RESULT__HISTORY_BUFFER_1              0x054
-#define RESULT__HISTORY_BUFFER_2              0x056
-#define RESULT__HISTORY_BUFFER_3              0x058
-#define RESULT__HISTORY_BUFFER_4              0x05A
-#define RESULT__HISTORY_BUFFER_5              0x05C
-#define RESULT__HISTORY_BUFFER_6              0x05E
-#define RESULT__HISTORY_BUFFER_7              0x060
-#define RESULT__RANGE_VAL                     0x062
-#define RESULT__RANGE_RAW                     0x064
-#define RESULT__RANGE_RETURN_RATE             0x066
-#define RESULT__RANGE_REFERENCE_RATE          0x068
-#define RESULT__RANGE_RETURN_SIGNAL_COUNT     0x06C
-#define RESULT__RANGE_REFERENCE_SIGNAL_COUNT  0x070
-#define RESULT__RANGE_RETURN_AMB_COUNT        0x074
-#define RESULT__RANGE_REFERENCE_AMB_COUNT     0x078
-#define RESULT__RANGE_RETURN_CONV_TIME        0x07C
-#define RESULT__RANGE_REFERENCE_CONV_TIME     0x080
-#define RANGE_SCALER                          0x096
-#define READOUT__AVERAGING_SAMPLE_PERIOD      0x10A
-#define FIRMWARE__BOOTUP                      0x119
-#define FIRMWARE__RESULT_SCALER               0x120
-#define I2C_SLAVE__DEVICE_ADDRESS             0x212
-#define INTERLEAVED_MODE__ENABLE              0x2A3
+///! 官方错误码定义
+#define VL6180X_ERROR_NONE 0        ///< 成功
+#define VL6180X_ERROR_SYSERR_1 1    ///< 系统错误1
+#define VL6180X_ERROR_SYSERR_5 5    ///< 系统错误5
+#define VL6180X_ERROR_ECEFAIL 6     ///< 早期收敛估计失败
+#define VL6180X_ERROR_NOCONVERGE 7  ///< 未检测到目标
+#define VL6180X_ERROR_RANGEIGNORE 8 ///< 阈值检查失败
+#define VL6180X_ERROR_SNR 11        ///< 环境光过强
+#define VL6180X_ERROR_RAWUFLOW 12   ///< 原始测距下溢
+#define VL6180X_ERROR_RAWOFLOW 13   ///< 原始测距上溢
+#define VL6180X_ERROR_RANGEUFLOW 14 ///< 测距下溢
+#define VL6180X_ERROR_RANGEOFLOW 15 ///< 测距上溢
 
-// 函数声明（统一命名，修复拼写不一致）
-uint8_t VL6180X_Start_Range(void);
-uint8_t VL6180X_Poll_Range(void);
-uint8_t VL6180X_Read_Range(void);  // 修正为VL6180X前缀，与定义一致
-uint16_t VL6180X_ReadRangeSingleMillimeters(void);
-void VL6180X_Clear_Interrupt(void);
+///! 官方新增寄存器（应用笔记）
+#define SYSRANGE__INTERMEASUREMENT_PERIOD 0x001b ///< 连续模式测量间隔
 
-uint8_t VL6180X_Init(void);
-void VL6180X_ConfigureDefault(void);
-void VL6180X_SetScaling(uint8_t new_scaling);
-void VL6180X_SetTimeout(uint16_t timeout);
+// ===================== 优化配置参数 =====================
+#define VL6180X_REG_SYSRANGE_MAX_CONVERGENCE_TIME 0x01C  // 最大收敛时间
+#define VL6180X_REG_SYSRANGE_CROSSTALK_COMPENSATION_RATE 0x023 // 串扰补偿率
+#define VL6180X_REG_SYSRANGE_CROSSTALK_VALID_HEIGHT 0x025 // 串扰有效高度
+#define VL6180X_REG_SYSRANGE_EARLY_CONVERGENCE_ESTIMATE 0x026 // 早期收敛估计
+#define VL6180X_REG_READOUT_AVERAGING_SAMPLE_PERIOD 0x01B // 采样周期
+
+// ===================== 错误返回值定义 =====================
+#define TOF_ERROR_RETURN_VALUE 255  // 报错时返回的距离值
+
+// ===================== 对外核心API =====================
+/**
+ * @brief 初始化VL6180X传感器
+ * @return esp_err_t ESP_OK=成功，其他=失败
+ */
+esp_err_t tof050c_init(void);
+
+/**
+ * @brief 读取单次有效测距值（毫米）
+ * @return uint16_t 有效距离（255=无效/错误，其他=毫米值）
+ */
+uint16_t tof050c_read_distance_mm(void);
 
  
 
-// 外部声明I2C总线句柄（供C文件使用）
-extern i2c_master_bus_handle_t bsp_i2c_bus_handle;
-
-#endif // TOF_H
+#endif

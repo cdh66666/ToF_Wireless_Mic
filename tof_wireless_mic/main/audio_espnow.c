@@ -94,9 +94,7 @@ static void adpcm_encode(const int16_t *in, size_t in_len, uint8_t *out, size_t 
         if (sign) prev_sample -= delta_val;
         else prev_sample += delta_val;
 
-        if (prev_sample > 32767) prev_sample = 32767;
-        if (prev_sample < -32768) prev_sample = -32768;
-
+ 
         if (i + 1 < sample_num) {
             diff = in[i+1] - prev_sample;
             step = adpcm_step_table[step_index];
@@ -121,8 +119,7 @@ static void adpcm_encode(const int16_t *in, size_t in_len, uint8_t *out, size_t 
             if (sign) prev_sample -= delta_val;
             else prev_sample += delta_val;
 
-            if (prev_sample > 32767) prev_sample = 32767;
-            if (prev_sample < -32768) prev_sample = -32768;
+ 
         }
 
         out[out_idx++] = (nibble1 << 4) | (nibble2 & 0x0F);
@@ -279,7 +276,7 @@ static void audio_send_task(void *arg)
 
             ret = esp_now_send(s_peer_mac, espnow_buf, 2 + send_len);
             if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "ESP-NOW发送失败: %d", ret);
+                //ESP_LOGE(TAG, "ESP-NOW发送失败: %d", ret);
                 vTaskDelay(2 / portTICK_PERIOD_MS);
                 continue;
             }

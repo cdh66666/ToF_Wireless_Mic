@@ -87,8 +87,7 @@ static void adpcm_decode(const uint8_t *in, size_t in_len, int16_t *out, size_t 
         if (sign) prev_sample -= delta_val;
         else prev_sample += delta_val;
 
-        if (prev_sample > 32767) prev_sample = 32767;
-        if (prev_sample < -32768) prev_sample = -32768;
+ 
         out[out_idx++] = prev_sample;
 
         step_index += adpcm_index_table[nibble1];
@@ -105,8 +104,7 @@ static void adpcm_decode(const uint8_t *in, size_t in_len, int16_t *out, size_t 
         if (sign) prev_sample -= delta_val;
         else prev_sample += delta_val;
 
-        if (prev_sample > 32767) prev_sample = 32767;
-        if (prev_sample < -32768) prev_sample = -32768;
+ 
         out[out_idx++] = prev_sample;
 
         step_index += adpcm_index_table[nibble2];
