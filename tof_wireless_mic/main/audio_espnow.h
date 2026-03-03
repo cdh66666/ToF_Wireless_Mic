@@ -7,9 +7,13 @@
 // 配置参数（可根据需要修改）
 #define AUDIO_TAG           "ESPNOW_AUDIO_TX"
 #define MIC_I2S_PORT        I2S_NUM_0
-#define ESPNOW_CHANNEL      1   // ESP-NOW信道（接收端需一致）
+#define ESPNOW_CHANNEL      6   // ESP-NOW信道（接收端需一致）
 #define AUDIO_BUF_SIZE      2048 // 音频缓冲区大小（字节）
 #define ESPNOW_PAYLOAD_LEN  250  // ESP-NOW单包数据长度（<=250）
+
+// 新增：监控统计相关配置
+#define MONITOR_INTERVAL_MS 1000 // 每1秒输出一次统计信息
+#define MAX_SEND_ERROR_CNT  100  // 发送失败计数上限
 
 /**
  * @brief 设置ESP-NOW接收端MAC地址
