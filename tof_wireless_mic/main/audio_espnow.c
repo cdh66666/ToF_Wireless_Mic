@@ -17,6 +17,7 @@
 // 全局变量
 static uint8_t s_peer_mac[ESP_NOW_ETH_ALEN] = {0x98, 0xa3, 0x16, 0xf0, 0xb4, 0x34}; // 默认MAC
 static i2s_chan_handle_t rx_chan;
+static uint8_t s_audio_transmission_enabled = 0; // 音频传输启用标志：0=禁用，1=启用
 
 // ==================== ADPCM 压缩核心模块 ====================
 typedef struct {
@@ -225,7 +226,7 @@ esp_err_t audio_espnow_init(void)
     ret = esp_now_add_peer(&peer_info);
     if (ret != ESP_OK) return ret;
 
-    ESP_LOGI(TAG, "ESP-NOW初始化完成，接收端MAC: "MACSTR, MAC2STR(s_peer_mac));
+    ESP_LOGI(AUDIO_TAG, "ESP-NOW初始化完成，接收端MAC: "MACSTR, MAC2STR(s_peer_mac));
     return ESP_OK;
 }
 
@@ -250,7 +251,13 @@ static void audio_send_task(void *arg)
     while (1) {
         esp_err_t ret = i2s_channel_read(rx_chan, i2s_32b_buf, max_i2s_read, &i2s_read_len, portMAX_DELAY);
         if (ret != ESP_OK || i2s_read_len == 0) {
-            ESP_LOGE(TAG, "读取I2S数据失败");
+                //ESP_LOGE(AUDIO_TAG, "读取I2S数据失败");
+            vTaskDelay(10 / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        // 检查传输标志位，只有启用时才处理和发送音频数据
+        if (!s_audio_transmission_enabled) {
             vTaskDelay(10 / portTICK_PERIOD_MS);
             continue;
         }
@@ -264,7 +271,7 @@ static void audio_send_task(void *arg)
         if (adpcm_len == 0) {
             continue;
         }
-        ESP_LOGD(TAG, "ADPCM压缩: %d字节 → %d字节", audio_16b_len, adpcm_len);
+        ESP_LOGD(AUDIO_TAG, "ADPCM压缩: %d字节 → %d字节", audio_16b_len, adpcm_len);
 
         send_offset = 0;
         while (send_offset < adpcm_len) {
@@ -276,7 +283,7 @@ static void audio_send_task(void *arg)
 
             ret = esp_now_send(s_peer_mac, espnow_buf, 2 + send_len);
             if (ret != ESP_OK) {
-                //ESP_LOGE(TAG, "ESP-NOW发送失败: %d", ret);
+                //ESP_LOGE(AUDIO_TAG, "ESP-NOW发送失败: %d", ret);
                 vTaskDelay(2 / portTICK_PERIOD_MS);
                 continue;
             }
@@ -291,4 +298,20 @@ esp_err_t audio_send_task_start(void)
 {
     BaseType_t ret = xTaskCreate(audio_send_task, "audio_send_task", 8192, NULL, 5, NULL);
     return (ret == pdPASS) ? ESP_OK : ESP_FAIL;
+}
+
+// ==================== 音频传输控制函数 ====================
+void audio_set_transmission_enabled(uint8_t enable)
+{
+    s_audio_transmission_enabled = (enable != 0) ? 1 : 0;
+    if (s_audio_transmission_enabled) {
+        ESP_LOGI(AUDIO_TAG, "音频传输已启用");
+    } else {
+        ESP_LOGI(AUDIO_TAG, "音频传输已禁用");
+    }
+}
+
+uint8_t audio_get_transmission_enabled(void)
+{
+    return s_audio_transmission_enabled;
 }
