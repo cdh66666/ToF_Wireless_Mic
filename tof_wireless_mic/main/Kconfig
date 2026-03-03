@@ -1,0 +1,11 @@
+menu "Audio Wi-Fi credentials"
+
+config WIFI_SSID
+    string "Wi-Fi SSID"
+    default "cdh"
+
+config WIFI_PASSWORD
+    string "Wi-Fi Password"
+    default "cdh888888"
+
+endmenu

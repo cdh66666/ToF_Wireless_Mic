@@ -12,8 +12,11 @@
 #include "nvs_flash.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
-#include "esp_now.h"
-#include "esp_mac.h"
+
+/* socket headers */
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 // 手动定义MIN/MAX宏
 #ifndef MIN
@@ -23,7 +26,7 @@
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #endif
 
-// ==================== ADPCM 解压核心模块 ====================
+// ==================== ADPCM 解压核心模块（保留不变）====================
 typedef struct {
     int16_t prev_sample;  // 上一个采样值
     int8_t step_index;    // 步长索引
@@ -87,7 +90,6 @@ static void adpcm_decode(const uint8_t *in, size_t in_len, int16_t *out, size_t 
         if (sign) prev_sample -= delta_val;
         else prev_sample += delta_val;
 
- 
         out[out_idx++] = prev_sample;
 
         step_index += adpcm_index_table[nibble1];
@@ -104,7 +106,6 @@ static void adpcm_decode(const uint8_t *in, size_t in_len, int16_t *out, size_t 
         if (sign) prev_sample -= delta_val;
         else prev_sample += delta_val;
 
- 
         out[out_idx++] = prev_sample;
 
         step_index += adpcm_index_table[nibble2];
@@ -114,15 +115,19 @@ static void adpcm_decode(const uint8_t *in, size_t in_len, int16_t *out, size_t 
 
     state->prev_sample = prev_sample;
     state->step_index = step_index;
-    *out_len = out_idx * 2;
+    *out_len = out_idx; // 修复：返回正确的采样数
 }
 
-// ==================== 配置参数 ====================
-#define TAG                 "ESPNOW_AUDIO_RX"
-#define ESPNOW_CHANNEL      1   // 与发送端一致
+// ==================== 配置参数（修改AP相关）====================
+#define TAG                 "UDP_AUDIO_RX_AP"
 #define AUDIO_QUEUE_SIZE    100  // 音频缓存队列大小
-#define ESPNOW_PAYLOAD_LEN  250 // 与发送端一致
 #define USB_AUDIO_BUF_LEN   2048 // USB UAC回调缓冲区大小
+
+// AP热点配置（可自定义）
+#define AP_SSID       "ESP32_AUDIO_AP"  // 热点名称
+#define AP_PASSWORD   "12345678"        // 热点密码（至少8位）
+#define AP_CHANNEL    1                 // 热点信道
+#define AP_MAX_STA    4                 // 最大连接数
 
 // 带长度的音频数据结构体
 typedef struct {
@@ -133,74 +138,147 @@ typedef struct {
 // 音频缓存队列
 static QueueHandle_t s_audio_queue = NULL;
 
-// ==================== ESP-NOW接收回调 ====================
-static void espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len)
+/* AP + UDP 接收 */
+#define AUDIO_UDP_PORT    12345
+static int s_udp_sock = -1;
+
+// ==================== WiFi AP 初始化（核心修改）====================
+static esp_err_t wifi_ap_init(void)
 {
-    if (recv_info == NULL || data == NULL || len <= 2) {
-        ESP_LOGE(TAG, "接收回调参数错误/数据过短");
-        return;
-    }
-
-    size_t adpcm_data_len = (data[0] << 8) | data[1];
-    if (adpcm_data_len > len - 2) {
-        ESP_LOGE(TAG, "数据长度异常: %d > %d", adpcm_data_len, len - 2);
-        return;
-    }
-    const uint8_t *adpcm_data = data + 2;
-
-    audio_packet_t *packet = malloc(sizeof(audio_packet_t));
-    if (packet == NULL) {
-        ESP_LOGE(TAG, "内存分配失败(packet)");
-        return;
-    }
-    packet->data = malloc(adpcm_data_len);
-    if (packet->data == NULL) {
-        ESP_LOGE(TAG, "内存分配失败(data)");
-        free(packet);
-        return;
-    }
-    
-    memcpy(packet->data, adpcm_data, adpcm_data_len);
-    packet->len = adpcm_data_len;
-
-    if (xQueueSend(s_audio_queue, &packet, 0) != pdTRUE) {
-        ESP_LOGW(TAG, "音频队列满，丢弃数据");
-        free(packet->data);
-        free(packet);
-    }
-
-    ESP_LOGD(TAG, "接收ESP-NOW ADPCM数据: %d字节", adpcm_data_len);
-}
-
-// ==================== ESP-NOW初始化 ====================
-static void espnow_init()
-{
+    // 1. 初始化NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
-    ESP_ERROR_CHECK(ret);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "NVS初始化失败: %s", esp_err_to_name(ret));
+        return ret;
+    }
 
+    // 2. 初始化网络接口
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+    
+    // 3. 创建默认AP接口（关键：替代原来的STA接口）
+    esp_netif_create_default_wifi_ap();
+
+    // 4. 初始化WiFi驱动
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+
+    // 5. 配置AP参数
+    wifi_config_t wifi_config = {
+        .ap = {
+            .ssid = AP_SSID,
+            .ssid_len = strlen(AP_SSID),
+            .password = AP_PASSWORD,
+            .channel = AP_CHANNEL,
+            .max_connection = AP_MAX_STA,
+            .authmode = WIFI_AUTH_WPA_WPA2_PSK, // 加密方式
+            .pmf_cfg = {
+                .required = false
+            }
+        },
+    };
+    // 如果密码为空，设置为开放热点
+    if (strlen(AP_PASSWORD) == 0) {
+        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+    }
+
+    // 6. 设置WiFi模式为AP
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    // 7. 配置AP参数
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
+    // 8. 启动WiFi AP
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_ERROR_CHECK(esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
 
-    ESP_ERROR_CHECK(esp_now_init());
-    ESP_ERROR_CHECK(esp_now_register_recv_cb(espnow_recv_cb));
-    ESP_ERROR_CHECK(esp_now_set_pmk((uint8_t *)"1234567890123456"));
+    ESP_LOGI(TAG, "WiFi AP启动成功");
+    ESP_LOGI(TAG, "热点名称: %s", AP_SSID);
+    ESP_LOGI(TAG, "热点密码: %s", strlen(AP_PASSWORD) > 0 ? AP_PASSWORD : "无");
+    ESP_LOGI(TAG, "ESP32 AP IP地址: 192.168.4.1"); // AP模式默认IP
 
-    uint8_t mac_addr[6];
-    esp_read_mac(mac_addr, ESP_MAC_WIFI_STA);
-    ESP_LOGI(TAG, "接收端MAC地址: "MACSTR, MAC2STR(mac_addr));
+    return ESP_OK;
 }
 
-// ==================== USB UAC音频输入回调 ====================
+// ==================== UDP 初始化（绑定AP接口）====================
+static esp_err_t udp_server_init(void)
+{
+    // 1. 创建UDP套接字
+    s_udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (s_udp_sock < 0) {
+        ESP_LOGE(TAG, "创建UDP套接字失败: errno %d", errno);
+        return ESP_FAIL;
+    }
+
+    // 2. 设置套接字可重用（避免端口占用）
+    int opt = 1;
+    setsockopt(s_udp_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    // 3. 绑定到AP的IP和端口（关键：INADDR_ANY表示监听所有接口）
+    struct sockaddr_in addr = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = htonl(INADDR_ANY), // 监听所有连接的IP
+        .sin_port = htons(AUDIO_UDP_PORT),
+    };
+    if (bind(s_udp_sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        ESP_LOGE(TAG, "绑定UDP端口失败: errno %d", errno);
+        close(s_udp_sock);
+        s_udp_sock = -1;
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "UDP服务器启动成功，监听端口: %d", AUDIO_UDP_PORT);
+    return ESP_OK;
+}
+
+// ==================== UDP 接收任务（保留逻辑，优化栈大小）====================
+static void udp_recv_task(void *arg)
+{
+    uint8_t buf[1024];
+    ESP_LOGI(TAG, "UDP接收任务启动");
+
+    while (1) {
+        struct sockaddr_in from;
+        socklen_t fromlen = sizeof(from);
+        // 接收UDP数据
+        int len = recvfrom(s_udp_sock, buf, sizeof(buf), 0,
+                           (struct sockaddr *)&from, &fromlen);
+        if (len <= 0) {
+            vTaskDelay(10 / portTICK_PERIOD_MS);
+            continue;
+        }
+        // 打印发送端信息（调试用）
+        ESP_LOGD(TAG, "收到来自 %s:%d 的数据，长度: %d",
+                 inet_ntoa(from.sin_addr), ntohs(from.sin_port), len);
+
+        // 解析ADPCM数据（前2字节为长度）
+        if (len <= 2) continue;
+        size_t adpcm_len = (buf[0] << 8) | buf[1];
+        if (adpcm_len > (size_t)(len - 2)) continue;
+        uint8_t *adpcm_data = buf + 2;
+
+        // 分配内存缓存数据
+        audio_packet_t *packet = malloc(sizeof(audio_packet_t));
+        if (!packet) continue;
+        packet->data = malloc(adpcm_len);
+        if (!packet->data) { 
+            free(packet); 
+            continue; 
+        }
+        memcpy(packet->data, adpcm_data, adpcm_len);
+        packet->len = adpcm_len;
+
+        // 放入队列（非阻塞）
+        if (xQueueSend(s_audio_queue, &packet, 0) != pdTRUE) {
+            ESP_LOGW(TAG, "音频队列满，丢弃数据");
+            free(packet->data);
+            free(packet);
+        }
+    }
+}
+
+// ==================== USB UAC音频输出回调（修复解码长度）====================
 static esp_err_t uac_input_cb(uint8_t *buf, size_t len, size_t *bytes_read, void *arg)
 {
     static adpcm_state_t adpcm_dec_state;
@@ -210,34 +288,37 @@ static esp_err_t uac_input_cb(uint8_t *buf, size_t len, size_t *bytes_read, void
     *bytes_read = 0;
     if (buf == NULL || len == 0) return ESP_FAIL;
 
-    size_t copied = 0;
     int16_t *pcm_buf = (int16_t *)buf;
-    size_t pcm_sample_needed = len / 2;
+    size_t pcm_sample_needed = len / 2; // 需要的PCM采样数（16位）
     size_t pcm_sample_copied = 0;
 
+    // 初始化解码状态
     static bool adpcm_dec_init = false;
     if (!adpcm_dec_init) {
         adpcm_init_state(&adpcm_dec_state);
         adpcm_dec_init = true;
     }
 
+    // 填充PCM数据
     while (pcm_sample_copied < pcm_sample_needed) {
         if (adpcm_dec_buf_len > 0) {
             size_t dec_len = 0;
             size_t dec_sample_max = pcm_sample_needed - pcm_sample_copied;
-            size_t dec_adpcm_max = (dec_sample_max + 1) / 2;
+            size_t dec_adpcm_max = (dec_sample_max + 1) / 2; // 1字节ADPCM=2个采样
             
             if (dec_adpcm_max > adpcm_dec_buf_len) {
                 dec_adpcm_max = adpcm_dec_buf_len;
             }
 
+            // 解码ADPCM为PCM
             adpcm_decode(adpcm_dec_buf, dec_adpcm_max, pcm_buf + pcm_sample_copied, &dec_len, &adpcm_dec_state);
-            size_t dec_sample = dec_len / 2;
+            size_t dec_sample = dec_len; // 修复：直接使用解码后的采样数
 
             if (dec_sample > 0) {
                 pcm_sample_copied += dec_sample;
                 adpcm_dec_buf_len -= dec_adpcm_max;
 
+                // 移动剩余数据
                 if (adpcm_dec_buf_len > 0) {
                     memmove(adpcm_dec_buf, adpcm_dec_buf + dec_adpcm_max, adpcm_dec_buf_len);
                 }
@@ -245,6 +326,7 @@ static esp_err_t uac_input_cb(uint8_t *buf, size_t len, size_t *bytes_read, void
             }
         }
 
+        // 从队列读取ADPCM数据
         audio_packet_t *packet = NULL;
         if (xQueueReceive(s_audio_queue, &packet, pdMS_TO_TICKS(2)) == pdTRUE) {
             if (adpcm_dec_buf_len + packet->len < sizeof(adpcm_dec_buf)) {
@@ -253,10 +335,11 @@ static esp_err_t uac_input_cb(uint8_t *buf, size_t len, size_t *bytes_read, void
             } else {
                 ESP_LOGW(TAG, "解码缓冲区满，丢弃部分ADPCM数据");
             }
-
+            // 释放内存
             free(packet->data);
             free(packet);
         } else {
+            // 无数据时填充静音
             size_t fill_sample = MIN(32, pcm_sample_needed - pcm_sample_copied);
             memset(pcm_buf + pcm_sample_copied, 0, fill_sample * 2);
             pcm_sample_copied += fill_sample;
@@ -267,18 +350,33 @@ static esp_err_t uac_input_cb(uint8_t *buf, size_t len, size_t *bytes_read, void
     return ESP_OK;
 }
 
-// ==================== 主函数 ====================
+// ==================== 主函数（调整初始化顺序）====================
 void app_main(void)
 {
+    // 1. 创建音频队列
     s_audio_queue = xQueueCreate(AUDIO_QUEUE_SIZE, sizeof(audio_packet_t *));
     if (s_audio_queue == NULL) {
-        ESP_LOGE(TAG, "创建队列失败");
+        ESP_LOGE(TAG, "创建音频队列失败");
         abort();
     }
 
-    espnow_init();
-    ESP_LOGI(TAG, "ESP-NOW接收端初始化完成");
+    // 2. 初始化WiFi AP
+    if (wifi_ap_init() != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi AP初始化失败");
+        abort();
+    }
 
+    // 3. 初始化UDP服务器
+    if (udp_server_init() != ESP_OK) {
+        ESP_LOGE(TAG, "UDP服务器初始化失败");
+        abort();
+    }
+
+    // 4. 启动UDP接收任务（栈大小调整为8192）
+    xTaskCreate(udp_recv_task, "udp_recv_task", 8192, NULL, 5, NULL);
+    ESP_LOGI(TAG, "UDP接收任务启动");
+
+    // 5. 初始化USB UAC
     uac_device_config_t uac_config = {
         .output_cb = NULL,
         .input_cb = uac_input_cb,

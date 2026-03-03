@@ -1,4 +1,10 @@
-idf_component_register(SRCS "main.c" "ToF.c" "audio_espnow.c" "ws2812.c"
-                       PRIV_REQUIRES nvs_flash esp_event esp_netif esp_wifi led_strip
-                       INCLUDE_DIRS "."
-                       )
+# CMakeLists for the main application component
+# This file was missing which caused the IDF build to perform a "minimal build".
+
+idf_component_register(
+    SRCS "main.c"
+         "audio_wifi.c"
+         "ToF.c"
+         "ws2812.c"
+    INCLUDE_DIRS "."
+)

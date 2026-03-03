@@ -1,0 +1,15 @@
+menu "Application Configuration"
+
+config WIFI_SSID
+    string "Wi-Fi SSID"
+    default "cdh"
+    help
+      SSID of the Wi‑Fi network the device should connect to.
+
+config WIFI_PASSWORD
+    string "Wi-Fi Password"
+    default "cdh888888"
+    help
+      Password for the Wi‑Fi network.
+
+endmenu

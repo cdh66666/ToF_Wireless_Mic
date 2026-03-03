@@ -1,4 +1,4 @@
-#include "audio_espnow.h"
+#include "audio_wifi.h"
 #include "ToF.h"
 #include "ws2812.h"
 #include "esp_log.h"
@@ -9,13 +9,19 @@ static const char *TAG = "MAIN";
 // 强制录音按键（内部上拉，按下接地）
 #define FORCE_RECORD_GPIO GPIO_NUM_9
 
-// 接收端MAC地址（替换为你的实际MAC）
-static const uint8_t peer_mac[6] = {0x98, 0xa3, 0x16, 0xf0, 0xb4, 0x34};
+// NOTE: 旧版本使用 ESP-NOW 需要手工填写接收端 MAC，
+//       Wi-Fi/UDP 版本使用 IP 广播/单播，因此不需要该地址。
 
 void app_main(void)
 {
-    // 1. 设置接收端MAC地址（可选，使用默认则注释）
-    audio_espnow_set_peer_mac(peer_mac);
+    // 1. 可选：设置 UDP 目标地址，默认为广播。对于接收端是 AP 时，
+    //    通常使用其固定 IP 192.168.4.1。
+    audio_wifi_set_dest_ip("192.168.4.1");
+
+    // 如果运行时需要修改要连接的热点（默认使用接收端 AP 的
+    // SSID/密码），可以在此处调用：
+    audio_wifi_set_sta_credentials(AUDIO_WIFI_RX_SSID, AUDIO_WIFI_RX_PASSWORD);
+
 
     // 2. 初始化I2S
     if (audio_i2s_init() != ESP_OK) {
@@ -24,12 +30,12 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "I2S初始化完成");                             
 
-    // 3. 初始化ESP-NOW
-    if (audio_espnow_init() != ESP_OK) {
-        ESP_LOGE(TAG, "ESP-NOW初始化失败");
+    // 3. 初始化 Wi-Fi + UDP
+    if (audio_wifi_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Wi-Fi 初始化失败");
         return;
     }
-    ESP_LOGI(TAG, "ESP-NOW初始化完成");
+    ESP_LOGI(TAG, "Wi-Fi 初始化完成");
 
     // 4. 启动音频发送任务
     if (audio_send_task_start() != ESP_OK) {

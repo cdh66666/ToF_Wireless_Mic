@@ -2159,6 +2159,13 @@ CONFIG_WL_SECTOR_SIZE=4096
 # end of Wear Levelling
 
 #
+# Application Configuration
+#
+CONFIG_WIFI_SSID="cdh"
+CONFIG_WIFI_PASSWORD="cdh888888"
+# end of Application Configuration
+
+#
 # CMake Utilities
 #
 # CONFIG_CU_RELINKER_ENABLE is not set
