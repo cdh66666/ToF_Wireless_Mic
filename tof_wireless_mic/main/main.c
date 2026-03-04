@@ -141,7 +141,7 @@ void app_main(void)
                 // 距离在5-15cm范围：绿灯，亮度随距离减少而增加，启动音频传输
                 uint8_t brightness = (uint8_t)(((150 - distance) * 255) / 100);
                 ws2812_set_green(brightness);
-                current_transmission_enabled = true;
+                
                 // ESP_LOGD(TAG, "距离: %d mm (5-15cm) - 绿灯，亮度: %d", distance, brightness);
             }
         }
