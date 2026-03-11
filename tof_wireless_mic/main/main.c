@@ -14,13 +14,16 @@ static const char *TAG = "MAIN";
 // 震动马达/LED控制引脚（GPIO21，默认低电平）
 #define VIBRATE_LED_GPIO  GPIO_NUM_21
 // 高电平保持时间（毫秒）
-#define VIBRATE_HOLD_MS   500
+#define VIBRATE_HOLD_MS   150
 
 // 全局变量：记录上一次的音频传输状态，用于检测状态变化
 static bool s_last_transmission_enabled = false;
 
 // 接收端MAC地址（替换为你的实际MAC）
-static const uint8_t peer_mac[6] = {0x98, 0xa3, 0x16, 0xf0, 0xb4, 0x34};
+// 接收端MAC地址（替换为你的实际MAC）
+// static const uint8_t peer_mac[6] = {0x98, 0xa3, 0x16, 0xf0, 0xb4, 0x34};
+static const uint8_t peer_mac[6] = {0xac, 0xa7, 0x04, 0xed, 0x96, 0x50};//白色
+// static const uint8_t peer_mac[6] = {0xac, 0xa7, 0x04, 0xee, 0x51, 0x60};
 
 /**
  * @brief 控制震动/LED引脚：置高并保持指定时间后恢复低电平
@@ -114,7 +117,7 @@ void app_main(void)
     // 8. 循环测距并控制RGB灯和音频传输（100ms/次）
     while (1) {
         uint16_t distance = tof050c_read_distance_mm();
-        bool current_transmission_enabled = false;
+        bool current_transmission_enabled = s_last_transmission_enabled; // 默认保持上一次状态，除非条件触发改变
 
         // 优先检测强制录音按键（按下接地）
         int force_level = gpio_get_level(FORCE_RECORD_GPIO);
